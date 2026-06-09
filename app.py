@@ -6,7 +6,7 @@ app = Flask(__name__)
 app.secret_key = "english_game_final_key"
 
 # =========================
-# 단어 (150개)
+# 단어 (150개 유지)
 # =========================
 easy = [
 ("apple","사과"),("banana","바나나"),("water","물"),("book","책"),("school","학교"),
@@ -33,6 +33,7 @@ medium = [
 ("transport","교통"),("hospital","병원"),("weather","날씨"),("season","계절"),("communication","소통"),
 ("opinion","의견"),("decision","결정"),("reason","이유"),("result","결과"),("process","과정")
 ]
+
 hard = [
 ("philosophy","철학"),("psychology","심리학"),("economy","경제"),("democracy","민주주의"),("globalization","세계화"),
 ("innovation","혁신"),("hypothesis","가설"),("phenomenon","현상"),("analysis","분석"),("evaluation","평가"),
@@ -45,7 +46,6 @@ hard = [
 ("synthesize","종합하다"),("validate","검증하다"),("framework","틀"),("dimension","차원"),("variable","변수"),
 ("algorithm","알고리즘"),("optimization","최적화"),("structure","구조"),("concept","개념"),("theory","이론")
 ]
-
 
 # =========================
 # 등급
@@ -61,16 +61,16 @@ def grade(acc):
     if acc >= 4: return "8등급"
     return "9등급"
 
-
 # =========================
 # UI
 # =========================
 HTML = """
 <style>
 body { font-family: Arial; background:#f4f6f9; text-align:center; }
-.card { background:white; width:360px; margin:50px auto; padding:25px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,0.1);}
-input { padding:10px; width:80%; }
-button { padding:10px 15px; margin-top:10px; }
+.card { background:white; width:380px; margin:50px auto; padding:25px; border-radius:12px;
+box-shadow:0 4px 10px rgba(0,0,0,0.1);}
+input, select { padding:10px; width:80%; margin-top:8px; }
+button { padding:10px 15px; margin-top:10px; cursor:pointer; }
 </style>
 
 <div class="card">
@@ -80,14 +80,14 @@ button { padding:10px 15px; margin-top:10px; }
 {% if step == "start" %}
 
 <form method="POST">
-<h3>난이도 선택</h3>
+<h3>난이도</h3>
 <select name="level">
 <option value="easy">초급</option>
 <option value="medium">중급</option>
 <option value="hard">고급</option>
 </select>
 
-<h3>모드 선택</h3>
+<h3>모드</h3>
 <select name="mode">
 <option value="1">뜻 → 영어</option>
 <option value="2">영어 → 뜻</option>
@@ -109,6 +109,10 @@ button { padding:10px 15px; margin-top:10px; }
 </form>
 
 <p>{{result}}</p>
+
+<form method="POST">
+<button name="action" value="restart">처음으로</button>
+</form>
 
 {% else %}
 
@@ -133,15 +137,26 @@ button { padding:10px 15px; margin-top:10px; }
 </div>
 """
 
-
 # =========================
 # 메인
 # =========================
 @app.route("/", methods=["GET", "POST"])
 def home():
 
-    if "step" not in session:
-        session["step"] = "start"
+    # ✅ session 안전 초기화 (500 에러 방지 핵심)
+    session.setdefault("step", "start")
+    session.setdefault("idx", 0)
+    session.setdefault("score", 0)
+    session.setdefault("wrong", [])
+    session.setdefault("times", [])
+    session.setdefault("start_time", time.time())
+
+    # =========================
+    # 재시작
+    # =========================
+    if request.method == "POST" and request.form.get("action") == "restart":
+        session.clear()
+        return render_template_string(HTML, step="start")
 
     # =========================
     # 시작
@@ -171,18 +186,16 @@ def home():
         session["step"] = "quiz"
 
     # =========================
-    # 재시작
+    # 종료 체크
     # =========================
-    if request.method == "POST" and request.form.get("action") == "restart":
-        session.clear()
-        session["step"] = "start"
-        return render_template_string(HTML, step="start")
+    if session["step"] == "quiz" and session["idx"] >= 50:
+        session["step"] = "end"
 
     # =========================
-    # 게임 종료
+    # 종료 화면
     # =========================
-    if session.get("step") == "end":
-        acc = round((session["score"]/100)*100, 2)
+    if session["step"] == "end":
+        acc = round((session["score"] / 100) * 100, 2)
         avg = sum(session["times"]) / len(session["times"]) if session["times"] else 0
 
         return render_template_string(HTML,
@@ -197,46 +210,42 @@ def home():
     # =========================
     # 퀴즈
     # =========================
-    if session.get("step") == "quiz":
+    pool = session.get("pool", [])
+    idx = session["idx"]
 
-        pool = session["pool"]
-        idx = session["idx"]
+    if not pool:
+        return render_template_string(HTML, step="start")
 
-        if idx >= 50:
-            session["step"] = "end"
-            return home()
+    word = pool[idx]
 
-        word = pool[idx]
+    question = word[1] if session["mode"] == "1" else word[0]
+    answer = word[0] if session["mode"] == "1" else word[1]
 
-        question = word[1] if session["mode"] == "1" else word[0]
-        answer = word[0] if session["mode"] == "1" else word[1]
+    result = ""
 
-        result = ""
+    if request.method == "POST" and "answer" in request.form:
+        now = time.time()
+        session["times"].append(now - session["start_time"])
+        session["start_time"] = now
 
-        if request.method == "POST" and "answer" in request.form:
-            end = time.time()
-            session["times"].append(end - session["start_time"])
-            session["start_time"] = end
+        user = request.form["answer"].strip().lower()
 
-            user = request.form["answer"].strip().lower()
+        if user == answer.lower():
+            session["score"] += 2
+            result = "정답!"
+        else:
+            session["wrong"].append(word)
+            result = f"오답! 정답: {answer}"
 
-            if user == answer.lower():
-                session["score"] += 2
-                result = "정답!"
-            else:
-                session["wrong"].append(word)
-                result = f"오답! 정답: {answer}"
+        session["idx"] += 1
 
-            session["idx"] += 1
-
-        return render_template_string(HTML,
-            step="quiz",
-            score=session["score"],
-            idx=session["idx"],
-            question=question,
-            result=result
-        )
-
+    return render_template_string(HTML,
+        step="quiz",
+        score=session["score"],
+        idx=session["idx"],
+        question=question,
+        result=result
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
