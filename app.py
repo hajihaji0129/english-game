@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, session
+from flask import Flask, request, render_template_string, session, redirect, url_for
 import random
 import time
 
@@ -223,29 +223,29 @@ def home():
 
     result = ""
 
-    if request.method == "POST" and "answer" in request.form:
-        now = time.time()
-        session["times"].append(now - session["start_time"])
-        session["start_time"] = now
+if request.method == "POST" and "answer" in request.form:
 
-        user = request.form["answer"].strip().lower()
+    now = time.time()
+    session["times"].append(now - session["start_time"])
+    session["start_time"] = now
 
-        if user == answer.lower():
-            session["score"] += 2
-            result = "정답!"
-        else:
-            session["wrong"].append(word)
-            result = f"오답! 정답: {answer}"
+    user = request.form["answer"].strip().lower()
 
-        session["idx"] += 1
+    pool = session["pool"]
+    word = pool[session["idx"]]
 
-    return render_template_string(HTML,
-        step="quiz",
-        score=session["score"],
-        idx=session["idx"],
-        question=question,
-        result=result
-    )
+    answer = word[0] if session["mode"] == "1" else word[1]
+
+    if user == answer.lower():
+        session["score"] += 2
+        result = "정답!"
+    else:
+        session["wrong"].append(word)
+        result = f"오답! 정답: {answer}"
+
+    session["idx"] += 1
+
+    return redirect(url_for("home"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
