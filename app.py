@@ -1,12 +1,13 @@
-from flask import Flask, request, render_template_string, session
+from flask import Flask, request, render_template_string, session, redirect, url_for
 import random
 import time
 
 app = Flask(__name__)
-app.secret_key = "english_game_final_key"
+# Render 배포 환경에서는 보안을 위해 secret_key가 필수적이며, 세션 암호화에 사용됩니다.
+app.secret_key = "english_game_final_key_v2"
 
 # =========================
-# 단어 (150개 유지)
+# 단어 데이터 (코드 가독성을 위해 상위 일부만 표기, 기존 150개 데이터 그대로 유지하시면 됩니다)
 # =========================
 easy = [
 ("apple","사과"),("banana","바나나"),("water","물"),("book","책"),("school","학교"),
@@ -48,7 +49,7 @@ hard = [
 ]
 
 # =========================
-# 등급
+# 등급 산출 함수
 # =========================
 def grade(acc):
     if acc >= 96: return "1등급"
@@ -62,7 +63,7 @@ def grade(acc):
     return "9등급"
 
 # =========================
-# UI (글자수 힌트 + Enter 자동 제출 포함)
+# UI (HTML Template)
 # =========================
 HTML = """
 <style>
@@ -71,180 +72,195 @@ body { font-family: Arial; background:#f4f6f9; text-align:center; }
 box-shadow:0 4px 10px rgba(0,0,0,0.1);}
 input, select { padding:10px; width:80%; margin-top:8px; }
 button { padding:10px 15px; margin-top:10px; cursor:pointer; }
+.result-msg { font-weight: bold; margin-top: 15px; color: #2c3e50; }
 </style>
 
 <div class="card">
-
 <h2>영어 단어 게임</h2>
 
 {% if step == "start" %}
+    <form method="POST">
+    <h3>난이도</h3>
+    <select name="level">
+    <option value="easy">초급</option>
+    <option value="medium">중급</option>
+    <option value="hard">고급</option>
+    </select>
 
-<form method="POST">
-<h3>난이도</h3>
-<select name="level">
-<option value="easy">초급</option>
-<option value="medium">중급</option>
-<option value="hard">고급</option>
-</select>
+    <h3>모드</h3>
+    <select name="mode">
+    <option value="1">뜻 → 영어</option>
+    <option value="2">영어 → 뜻</option>
+    </select>
 
-<h3>모드</h3>
-<select name="mode">
-<option value="1">뜻 → 영어</option>
-<option value="2">영어 → 뜻</option>
-</select>
-
-<button name="action" value="start">시작</button>
-</form>
+    <button name="action" value="start">시작</button>
+    </form>
 
 {% elif step == "quiz" %}
+    <p>점수: {{score}} / 100</p>
+    <p>진행: {{idx}} / 50</p>
 
-<p>점수: {{score}} / 100</p>
-<p>진행: {{idx}} / 50</p>
+    <h3>{{question}}</h3>
+    <p style="color:gray;">글자 수 힌트: {{hint}}자</p>
 
-<h3>{{question}}</h3>
-<p style="color:gray;">글자 수 힌트: {{hint}}자</p>
+    {% if result %}
+        <p class="result-msg">{{result}}</p>
+    {% endif %}
 
-<form method="POST">
-<input name="answer" autocomplete="off" autofocus onkeydown="if(event.key==='Enter'){this.form.submit();}">
-<button>제출</button>
-</form>
+    <form method="POST">
+    <input name="answer" autocomplete="off" autofocus onkeydown="if(event.key==='Enter'){this.form.submit();}">
+    <button>제출</button>
+    </form>
 
-<p>{{result}}</p>
-
-<form method="POST">
-<button name="action" value="restart">처음으로</button>
-</form>
+    <br>
+    <form method="POST">
+    <button name="action" value="restart">처음으로</button>
+    </form>
 
 {% else %}
+    <h2>게임 종료</h2>
+    <p>점수: {{score}} / 100</p>
+    <p>정답률: {{acc}}%</p>
+    <p>등급: {{g}}</p>
+    <p>평균 반응 시간: {{avg}}초</p>
 
-<h2>게임 종료</h2>
+    <h3>오답노트</h3>
+    {% for w in wrong %}
+    <p>{{w[0]}} - {{w[1]}}</p>
+    {% endfor %}
 
-<p>점수: {{score}} / 100</p>
-<p>정답률: {{acc}}%</p>
-<p>등급: {{g}}</p>
-<p>평균 반응 시간: {{avg}}초</p>
-
-<h3>오답노트</h3>
-{% for w in wrong %}
-<p>{{w[0]}} - {{w[1]}}</p>
-{% endfor %}
-
-<form method="POST">
-<button name="action" value="restart">처음으로</button>
-</form>
-
+    <form method="POST">
+    <button name="action" value="restart">처음으로</button>
+    </form>
 {% endif %}
-
 </div>
 """
 
 # =========================
-# 메인
+# 메인 라우터
 # =========================
 @app.route("/", methods=["GET", "POST"])
 def home():
+    # 사용자의 현재 세션 상태 확인 (없으면 start로 강제 지정)
+    if "step" not in session:
+        session["step"] = "start"
 
-    session.setdefault("step", "start")
-    session.setdefault("idx", 0)
-    session.setdefault("score", 0)
-    session.setdefault("wrong", [])
-    session.setdefault("times", [])
-    session.setdefault("start_time", time.time())
+    if request.method == "POST":
+        action = request.form.get("action")
+        
+        # 1. 처음으로 (다시 시작) 버튼 클릭 시 세션 초기화
+        if action == "restart":
+            session.clear()
+            return redirect(url_for("home"))
 
-    # restart
-    if request.method == "POST" and request.form.get("action") == "restart":
-        session.clear()
+        # 2. 게임 시작 버튼 클릭 시 각 사용자 전용 세션 데이터 생성
+        if action == "start" and session["step"] == "start":
+            level = request.form.get("level")
+            mode = request.form.get("mode")
+
+            if level == "easy":
+                pool = easy[:]
+            elif level == "medium":
+                pool = medium[:]
+            else:
+                pool = hard[:]
+
+            random.shuffle(pool)
+            pool = pool[:50]  # 50개 선택
+
+            # 사용자 세션(사물함)에 게임 정보 독립 저장
+            session["pool"] = pool
+            session["mode"] = mode
+            session["idx"] = 0
+            session["score"] = 0
+            session["wrong"] = []
+            session["times"] = []
+            session["start_time"] = time.time()
+            session["result"] = ""  # 정답/오답 결과 메시지 저장용
+            session["step"] = "quiz"
+            
+            return redirect(url_for("home"))
+
+        # 3. 퀴즈 정답 제출 시 처리
+        if "answer" in request.form and session["step"] == "quiz":
+            pool = session.get("pool", [])
+            idx = session.get("idx", 0)
+
+            if idx < len(pool):
+                word = pool[idx]
+                # 모드에 따른 정답 설정
+                answer = word[0] if session["mode"] == "1" else word[1]
+                
+                # 시간 측정
+                now = time.time()
+                session["times"].append(now - session["start_time"])
+                session["start_time"] = now  # 다음 문제를 위한 시간 리셋
+
+                user_ans = request.form["answer"].strip().lower()
+                real_ans = answer.strip().lower()
+
+                if user_ans == real_ans:
+                    session["score"] += 2
+                    session["result"] = f"⭕ 정답입니다!"
+                else:
+                    session["wrong"].append(word)
+                    session["result"] = f"❌ 오답! 정답은 [{answer}] 입니다."
+
+                # 정답 확인 후 확실하게 인덱스를 증가시킴
+                session["idx"] += 1
+                
+                # 50문제를 다 풀었으면 종료 단계로 전환
+                if session["idx"] >= 50:
+                    session["step"] = "end"
+
+            return redirect(url_for("home"))
+
+    # =========================
+    # GET 요청 처리 (화면 그려주기)
+    # =========================
+    if session["step"] == "start":
         return render_template_string(HTML, step="start")
 
-    # start
-    if request.method == "POST" and request.form.get("action") == "start":
+    elif session["step"] == "quiz":
+        pool = session.get("pool", [])
+        idx = session.get("idx", 0)
 
-        level = request.form.get("level")
-        mode = request.form.get("mode")
+        # 예외 처리: 인덱스가 범위를 벗어나면 바로 결과창으로
+        if idx >= len(pool):
+            session["step"] = "end"
+            return redirect(url_for("home"))
 
-        pool = easy if level == "easy" else medium if level == "medium" else hard
+        word = pool[idx]
+        question = word[1] if session["mode"] == "1" else word[0]
+        answer = word[0] if session["mode"] == "1" else word[1]
+        hint = len(answer)
 
-        random.shuffle(pool)
-        pool = pool[:50]
-
-        session["pool"] = pool
-        session["mode"] = mode
-        session["idx"] = 0
-        session["score"] = 0
-        session["wrong"] = []
-        session["times"] = []
-        session["start_time"] = time.time()
-        session["step"] = "quiz"
-
-    # end check
-    if session.get("step") == "quiz" and session["idx"] >= 50:
-        session["step"] = "end"
-
-    if session["step"] == "end":
-        acc = round((session["score"] / 100) * 100, 2)
-        avg = sum(session["times"]) / len(session["times"]) if session["times"] else 0
-
-        return render_template_string(HTML,
-            step="end",
+        return render_template_string(
+            HTML,
+            step="quiz",
             score=session["score"],
+            idx=idx + 1,  # 사용자 화면에는 1번 문제부터 표시되도록 변경
+            question=question,
+            hint=hint,
+            result=session.get("result", "")
+        )
+
+    elif session["step"] == "end":
+        score = session.get("score", 0)
+        # 50문제 만점이므로 정답률 계산 (점수 기준이 아닌 문제 수 기준으로 조정 가능)
+        acc = round((score / 100) * 100, 2)
+        times = session.get("times", [])
+        avg = sum(times) / len(times) if times else 0
+
+        return render_template_string(
+            HTML,
+            step="end",
+            score=score,
             acc=acc,
             g=grade(acc),
             avg=round(avg, 2),
-            wrong=session["wrong"]
+            wrong=session.get("wrong", [])
         )
-
-    # quiz
-    pool = session.get("pool", [])
-    idx = session["idx"]
-
-    if idx >= len(pool):
-        session["step"] = "end"
-        return home()
-
-    word = pool[idx]
-
-    question = word[1] if session["mode"] == "1" else word[0]
-    answer = word[0] if session["mode"] == "1" else word[1]
-
-    hint = len(answer)
-
-    result = ""
-
-    if request.method == "POST" and "answer" in request.form:
-
-        now = time.time()
-        session["times"].append(now - session["start_time"])
-        session["start_time"] = now
-
-        user = request.form["answer"].strip().lower()
-
-        if user == answer.lower():
-            session["score"] += 2
-            result = "정답!"
-        else:
-            session["wrong"].append(word)
-            result = f"오답! 정답: {answer}"
-
-        # 🔥 핵심 수정: 무조건 다음 문제로 이동 (버그 해결)
-        session["idx"] += 1
-
-        return render_template_string(HTML,
-            step=session["step"],
-            score=session["score"],
-            idx=session["idx"],
-            question=question,
-            result=result,
-            hint=hint
-        )
-
-    return render_template_string(HTML,
-        step=session["step"],
-        score=session["score"],
-        idx=session["idx"],
-        question=question,
-        result=result,
-        hint=hint
-    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
